@@ -19,7 +19,7 @@ from threading import Lock, Thread, Timer
 from typing import Any, List, Callable, Optional, Tuple
 from urllib import request
 
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 
 
 class Logger:
@@ -40,7 +40,6 @@ class Logger:
             logoption=syslog.LOG_PID,
         )
         syslog.syslog(level, text)
-
 
 class Settings:
     """Loads all settings from a JSON file and provides built-in defaults"""
@@ -120,17 +119,24 @@ class PresenceDetector(Thread):
         else:
             location = self._settings.away
 
-        body = {"mac": device, "location_name": location, "source_type": self._settings.source_type}
+        object_id = device.lower().replace(":", "_")            
+        attributes = {"source_type": self._settings.source_type, "mac": device}
+
         if device in self._settings.params:
-            body.update(self._settings.params[device])
+            attributes.update(self._settings.params[device])
+
         if self._settings.ap_name:
-            body["mac"] = f"{self._settings.ap_name}_{device}"
+            attributes["ap_name"] = self._settings.ap_name
+            object_id = f"{self._settings.ap_name}_{object_id}"
+
+        entity_id = f"device_tracker.{object_id}"
+        body = {"state": location, "attributes": attributes}
 
         self._logger.log(f"Posting to HA: {body}", True)
 
         try:
             response, ok = self._post(
-                f"{self._settings.hass_url}/api/services/device_tracker/see",
+                f"{self._settings.hass_url}/api/states/{entity_id}",
                 data=body,
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
             )
