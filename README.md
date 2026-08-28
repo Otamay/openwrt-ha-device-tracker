@@ -67,6 +67,7 @@ The settings file on your OpenWRT device looks like this:
   "ap_name": "",
   "location": "home",
   "away": "not_home",
+  "away_timeout": 5,
   "fallback_sync_interval": 0,
   "debug": false
 }
@@ -85,6 +86,7 @@ For info on how these params appear in HA see [below](#home-assistant-configurat
 * ap_name: If you have only one access point, leave as "". If this runs on multiple access points, give a name here, e.g. "ap1". The mac address of every Wi-Fi device will be prefixed with this name in HA.
 * location: Custom location name to be assigned to online devices. Default: "home"
 * away: Custom location name to be sent when a device is no longer connected. Default: "not_home"
+* away_timeout: Seconds to wait before declaring a device as no longer connected. Default: 5
 * fallback_sync_interval: Interval in seconds to perform a full sync of online/offline devices to HA. Enable this as a fallback option if you have issues with devices not being detected as 'offline' when they go out of WiFi range.
 **NOTE**: this will perform a 'ubus get clients' call every X seconds, which could increase load on the router. Default 0 (disabled)
 * source_type: This is the type of device that gets sent to HA to represent the tracking device. It defaults to 'router', but can also be set to 'gps' to allow for different zones/locations to work.
