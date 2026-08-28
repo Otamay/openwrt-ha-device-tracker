@@ -15,11 +15,11 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 from queue import Queue
-from threading import Thread
+from threading import Lock, Thread, Timer
 from typing import Any, List, Callable, Optional, Tuple
 from urllib import request
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 
 class Logger:
@@ -54,6 +54,7 @@ class Settings:
             "params": {},
             "location": "home",
             "away": "not_home",
+            "away_timeout": 5,
             "fallback_sync_interval": 0,
             "source_type": "router",
             "debug": False,
@@ -98,6 +99,8 @@ class PresenceDetector(Thread):
         self._watchers: List[UbusWatcher] = []
         self._killed = False
         self._last_seen_clients: set[tuple[str, str]] = set()
+        self._pending_away: dict[str, Timer] = {}
+        self._state_lock = Lock()
         self._online_clients: dict[str, set[str]] = {}
         for interface in self._settings.interfaces:
             self._online_clients[interface] = set()
@@ -139,28 +142,52 @@ class PresenceDetector(Thread):
         return ok
 
     def set_device_away(self, interface: str, device: str) -> None:
-        """Mark a client as away in HA"""
+        """Schedule a client as away in HA, unless it reconnects within the grace period"""
         if not self._should_handle_device(device):
             return
-        if device in self._online_clients[interface]:
-            self._online_clients[interface].remove(device)
-        for intf in set(self._settings.interfaces) - {interface}:
-            if device in self._online_clients[intf]:
-                # Device is still connected to another interface -> ignore
-                self._logger.log(
-                    f"Device {device} still connected to {intf}, ignoring away event.",
-                    True,
+
+        def check_and_mark_away():
+            with self._state_lock:
+                self._pending_away.pop(device, None)
+                still_online = any(
+                    device in clients for clients in self._online_clients.values()
                 )
-                return
-        self._queue.put(QueueItem(device, interface, QueueItem.Action.DELETE))
-        self._logger.log(f"Device {device} on {interface} is now away")
+
+            if not still_online:
+                self._queue.put(QueueItem(device, interface, QueueItem.Action.DELETE))
+                self._logger.log(f"Device {device} on {interface} is now away")
+
+        with self._state_lock:
+            existing = self._pending_away.get(device)
+            if existing:
+                existing.cancel()
+            if device in self._online_clients[interface]:
+                self._online_clients[interface].remove(device)
+
+            for intf in set(self._settings.interfaces) - {interface}:
+                if device in self._online_clients[intf]:
+                    # Device is still connected to another interface -> ignore
+                    self._logger.log(
+                        f"Device {device} still connected to {intf}, ignoring away event.",
+                        True,
+                    )
+                    return
+
+                
+            timer = Timer(self._settings.away_timeout, check_and_mark_away)
+            self._pending_away[device] = timer
+            timer.start()
 
     def set_device_home(self, interface: str, device: str) -> None:
         """Add client to the 'add' queue"""
         if not self._should_handle_device(device):
             return
+        with self._state_lock:
+            pending = self._pending_away.pop(device, None)
+            if pending:
+                pending.cancel()
+            self._online_clients[interface].add(device)
         self._queue.put(QueueItem(device, interface, QueueItem.Action.ADD))
-        self._online_clients[interface].add(device)
         self._logger.log(
             f"Device {device} on {interface} is now at {self._settings.location}"
         )
